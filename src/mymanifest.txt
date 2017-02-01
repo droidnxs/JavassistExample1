@@ -1,0 +1,4 @@
+Boot-Class-Path: javassist.jar
+Premain-Class: agent.SimpleTransformer
+Can-Retransform-Classes: true
+Class-Path: lib/commons-modeler-2.0.1.jar lib/commons-logging-1.2.jar
