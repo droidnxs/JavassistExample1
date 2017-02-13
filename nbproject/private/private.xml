@@ -7,9 +7,9 @@
             <file>file:/C:/Users/css102082/Documents/NetBeansProjects/JavassistExample1/src/agent/SimpleTransformer.java</file>
             <file>file:/C:/Users/css102082/Documents/NetBeansProjects/JavassistExample1/src/collector/GraphiteWriter.java</file>
             <file>file:/C:/Users/css102082/Documents/NetBeansProjects/JavassistExample1/src/plugins/JDBC/Util.java</file>
+            <file>file:/C:/Users/css102082/Documents/NetBeansProjects/JavassistExample1/src/collector/CSVWriter.java</file>
             <file>file:/C:/Users/css102082/Documents/NetBeansProjects/JavassistExample1/src/plugins/JMX/JMXRemoteUtils.java</file>
             <file>file:/C:/Users/css102082/Documents/NetBeansProjects/JavassistExample1/src/collector/MySQLWriter.java</file>
-            <file>file:/C:/Users/css102082/Documents/NetBeansProjects/JavassistExample1/src/plugins/JMX/JMXConstants.java</file>
             <file>file:/C:/Users/css102082/Documents/NetBeansProjects/JavassistExample1/src/plugins/JMX/JMXTransformer.java</file>
         </group>
     </open-files>

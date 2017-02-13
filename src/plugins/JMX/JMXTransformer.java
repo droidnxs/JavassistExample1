@@ -6,6 +6,7 @@
 package plugins.JMX;
 
 import static agent.SimpleTransformer.mainClassName;
+import collector.CSVWriter;
 import collector.GraphiteWriter;
 import static collector.GraphiteWriter.currentTimeMillisWithLinefeed;
 import static collector.GraphiteWriter.removeWhitespacesAndSpecialChars;
@@ -18,6 +19,7 @@ import java.lang.management.MemoryPoolMXBean;
 import java.lang.management.RuntimeMXBean;
 import java.lang.management.ThreadMXBean;
 import java.net.MalformedURLException;
+import java.util.ArrayList;
 import java.util.Hashtable;
 import java.util.Iterator;
 import java.util.List;
@@ -40,8 +42,10 @@ import javax.management.remote.JMXConnector;
 import javax.management.remote.JMXConnectorFactory;
 import javax.management.remote.JMXServiceURL;
 import org.apache.commons.modeler.Registry;
+import static plugins.JMX.JMXRemoteUtils.getCSVFormat;
 import static plugins.JMX.JMXRemoteUtils.getCommitted;
 import static plugins.JMX.JMXRemoteUtils.getInit;
+import static plugins.JMX.JMXRemoteUtils.getLineFormat;
 import static plugins.JMX.JMXRemoteUtils.getMax;
 import static plugins.JMX.JMXRemoteUtils.getUsed;
 
@@ -52,59 +56,69 @@ import static plugins.JMX.JMXRemoteUtils.getUsed;
 public class JMXTransformer implements Runnable {
 
     static Thread remoteJMXListener;
+    static Thread CSVWriterThread;
+    static Thread GraphiteWriterThread;
 
     static boolean remoteMode = false;
 
     private static String JMX_REMOTE_HOST = null;
     private static String JMX_REMOTE_PORT = null;
     private static String[] JMX_REMOTE_AUTH = null;
-
+    public static String appName = null;
+    public static String outputMode = null;
     static JMXServiceURL url = null;
     static JMXConnector jmxc = null;
     static MBeanServerConnection conn = null;
 
-    public static long JMX_COLLECTION_INTERVAL_MS = 5000;
+    public static long JMX_COLLECTION_INTERVAL_MS = 10000;
     public static long JMX_LISTENER_START_DELAY_MS = 10000;
-
     public float BYTE_TO_KB_FACTOR = 1 / 1024f;
     public float BYTE_TO_MB_FACTOR = 1 / 1048576f;
 
-    public static LinkedBlockingQueue jmxMetricsQueue = new LinkedBlockingQueue();
+
+    public static LinkedBlockingQueue jmxMetricsQueue = null;
+    public static LinkedBlockingQueue csvMetricsQueue = null;
     static ClassLoadingMXBean classLoadingMXBean = ManagementFactory.getClassLoadingMXBean();
     static List<MemoryPoolMXBean> memoryPoolMXBean = ManagementFactory.getMemoryPoolMXBeans();
     static MemoryMXBean memoryMXBean = ManagementFactory.getMemoryMXBean();
     static ThreadMXBean threadMXBean = ManagementFactory.getThreadMXBean();
     static RuntimeMXBean runtimeMxBean = ManagementFactory.getRuntimeMXBean();
     static List<GarbageCollectorMXBean> gcMXBean = ManagementFactory.getGarbageCollectorMXBeans();
-    Map<String, String[]> requiredBeans = new ConcurrentHashMap<>();
     private static StringBuilder metricSet = null;
-
+    List<String[]> metricList = new ArrayList<String[]> ();
+    
     @Override
     public void run() {
         try {
             Thread.sleep(JMX_LISTENER_START_DELAY_MS);
-
             url = new JMXServiceURL("service:jmx:rmi:///jndi/rmi://10.8.157.42:7003/jmxrmi");
-            System.out.println("VM Name: " + runtimeMxBean.getName());
-            System.out.println("VM Args: " + runtimeMxBean.getInputArguments());
             String metricFooter = null;
             long[][] gcBeans = {{0L, 0L, 0L, 0L}, {0L, 0L, 0L, 0L}};
             int counter = 0;
-
+            if(outputMode == "csv")
+            {
+                csvMetricsQueue = new LinkedBlockingQueue();
+            }
+            else
+            {
+                jmxMetricsQueue = new LinkedBlockingQueue();
+            }
             while (true) {
                 metricSet = new StringBuilder();
                 metricFooter = currentTimeMillisWithLinefeed();
                 //remote mode detected
                 if (remoteMode) {
-                    if (JMX_REMOTE_AUTH != null) {
-                        Map<String, String[]> env = new Hashtable<>();
-                        env.put(JMXConnector.CREDENTIALS, JMX_REMOTE_AUTH);
-                        jmxc = JMXConnectorFactory.connect(url, env);
-                    } else {
-                        jmxc = JMXConnectorFactory.connect(url, null);
-                    }
-                    if (jmxc != null) {
-                        conn = jmxc.getMBeanServerConnection();
+                    if (counter == 0) {
+                        if (JMX_REMOTE_AUTH != null) {
+                            Map<String, String[]> env = new Hashtable<>();
+                            env.put(JMXConnector.CREDENTIALS, JMX_REMOTE_AUTH);
+                            jmxc = JMXConnectorFactory.connect(url, env);
+                        } else {
+                            jmxc = JMXConnectorFactory.connect(url, null);
+                        }
+                        if (jmxc != null) {
+                            conn = jmxc.getMBeanServerConnection();
+                        }
                     }
                     /*Set dsNames = conn.queryNames(new ObjectName("Catalina:type=DataSource,*"), null);
                      System.out.println(dsNames.size());
@@ -114,31 +128,89 @@ public class JMXTransformer implements Runnable {
                      ObjectName objectname = (ObjectName) it.next();
                      System.out.println(objectname.toString() + " NUMACTIVE: " + conn.getAttribute(objectname, "numActive"));
                      }*/
-
-                    Set dsNames = conn.queryNames(new ObjectName(ManagementFactory.MEMORY_MXBEAN_NAME), null);
+                    Set runtimes = conn.queryNames(new ObjectName(ManagementFactory.RUNTIME_MXBEAN_NAME), null);
+                    Set memoryNames = conn.queryNames(new ObjectName(ManagementFactory.MEMORY_MXBEAN_NAME), null);
+                    Set memoryPools = conn.queryNames(new ObjectName("java.lang:type=MemoryPool,name=*"), null);
+                    Set gcNames = conn.queryNames(new ObjectName("java.lang:type=GarbageCollector,name=*"), null);
+                    Set threading = conn.queryNames(new ObjectName("java.lang:type=Threading"), null);
+                    Set dataSource = conn.queryNames(new ObjectName("Catalina:type=DataSource,*"), null);
                     //System.out.println(dsNames.size());
-                    Iterator it = dsNames.iterator();
+                    
+                    Iterator it = null;
+                    if (counter == 0) {
+                        it = runtimes.iterator();
+                        while (it.hasNext()) {
+                            ObjectName objectname = (ObjectName) it.next();
+                            System.out.println("Remote monitoring of " + conn.getAttribute(objectname, "Name") + " started");
+                            System.out.println("Classpath: " + conn.getAttribute(objectname, "ClassPath"));
+                            System.out.println("Output Mode: " + outputMode);
+                        }
+                    }
+                    
+                    it = memoryNames.iterator();
                     while (it.hasNext()) {
                         ObjectName objectname = (ObjectName) it.next();
                         CompositeData HeapMemoryUsage = (CompositeData) conn.getAttribute(objectname, "HeapMemoryUsage");
                         CompositeData NonHeapMemoryUsage = (CompositeData) conn.getAttribute(objectname, "NonHeapMemoryUsage");
-                        long init = (long) HeapMemoryUsage.get("init");
-                        //System.out.println(init);
-
+                      
                         metricSet
-                                .append(mainClassName).append(".JMX.Memory.Heap.Usage.Committed ").append(getCommitted(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append(mainClassName).append(".JMX.Memory.Heap.Usage.Used ").append(getUsed(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append(mainClassName).append(".JMX.Memory.Heap.Usage.Init ").append(getInit(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append(mainClassName).append(".JMX.Memory.Heap.Usage.Max ").append(getMax(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append(mainClassName).append(".JMX.Memory.Non_heap.Usage.Committed ").append(getCommitted(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append(mainClassName).append(".JMX.Memory.Non_heap.Usage.Used ").append(getUsed(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append(mainClassName).append(".JMX.Memory.Non_heap.Usage.Init ").append(getInit(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append(mainClassName).append(".JMX.Memory.Non_heap.Usage.Max ").append(getMax(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter);
-                        */System.out.println(objectname.toString() + " ObjectPendingFinalizationCount: " + conn.getAttribute(objectname, "ObjectPendingFinalizationCount"));
-
-                        jmxMetricsQueue.add(metricSet.toString());
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Heap.Usage.Committed ").append(getCommitted(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Heap.Usage.Used ").append(getUsed(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Heap.Usage.Init ").append(getInit(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Heap.Usage.Max ").append(getMax(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Non_heap.Usage.Committed ").append(getCommitted(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Non_heap.Usage.Used ").append(getUsed(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Non_heap.Usage.Init ").append(getInit(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Non_heap.Usage.Max ").append(getMax(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter);                                              
                     }
-
+                    it = memoryPools.iterator();
+                    while (it.hasNext()) {
+                        ObjectName objectname = (ObjectName) it.next();
+                        CompositeData Usage = (CompositeData) conn.getAttribute(objectname, "Usage");
+                        String poolName = objectname.toString().substring(objectname.toString().lastIndexOf("=") + 1);
+                        metricSet
+                                .append("javaagent.").append(appName).append(".JMX.MemoryPools." + removeWhitespacesAndSpecialChars(poolName) + ".Usage.Committed ").append(getCommitted(Usage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.MemoryPools." + removeWhitespacesAndSpecialChars(poolName) + ".Usage.Used ").append(getUsed(Usage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.MemoryPools." + removeWhitespacesAndSpecialChars(poolName) + ".Usage.Init ").append(getInit(Usage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.MemoryPools." + removeWhitespacesAndSpecialChars(poolName) + ".Usage.Max ").append(getMax(Usage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter);
+                    }
+                    it = gcNames.iterator();
+                    while (it.hasNext()) {
+                        ObjectName objectname = (ObjectName) it.next();
+                        long CollectionCount = (long) conn.getAttribute(objectname, "CollectionCount");
+                        long CollectionTime = (long) conn.getAttribute(objectname, "CollectionTime");
+                        String gcName = objectname.toString().substring(objectname.toString().lastIndexOf("=") + 1);
+                        metricSet
+                                .append("javaagent.").append(appName).append(".JMX.GC." + removeWhitespacesAndSpecialChars(gcName) + ".CollectionCount ").append(CollectionCount).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.GC." + removeWhitespacesAndSpecialChars(gcName) + ".CollectionTime ").append(CollectionTime).append(" ").append(metricFooter);
+                    }
+                    it = threading.iterator();
+                    while (it.hasNext()) {
+                        ObjectName objectname = (ObjectName) it.next();
+                        int ThreadCount = (int) conn.getAttribute(objectname, "ThreadCount");
+                        int DaemonThreadCount = (int) conn.getAttribute(objectname, "DaemonThreadCount");
+                        long TotalStartedCount = (long) conn.getAttribute(objectname, "TotalStartedThreadCount");
+                        
+                        metricSet
+                                .append("javaagent.").append(appName).append(".JMX.Threads.ThreadCount ").append(ThreadCount).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Threads.DaemonThreadCount ").append(DaemonThreadCount).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Threads.TotalStartedThreadCount ").append(TotalStartedCount).append(" ").append(metricFooter);
+                    }
+                    String objName, dataSourceContext, dataSourceName;
+                    for (Iterator dit = dataSource.iterator(); dit.hasNext();) {
+                        ObjectName objectname = (ObjectName) dit.next();
+                        //if(!objectname.toString().contains("context=/," || !))
+                        objName = objectname.toString();
+                        dataSourceContext = objName.substring(objName.indexOf("context=/") + 8, objName.indexOf(",host")).replace("/", "_");
+                        dataSourceName = objName.substring(objName.indexOf("name=\"") + 6, objName.lastIndexOf("\""));
+                        metricSet.append("javaagent.").append(appName).append(".JMX.DataSource." + dataSourceContext + "." + dataSourceName + ".numActive ").append(conn.getAttribute(objectname, "numActive")).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.DataSource." + dataSourceContext + "." + dataSourceName + ".numIdle ").append(conn.getAttribute(objectname, "numIdle")).append(" ").append(metricFooter);
+                        /*System.out.println("Context: " + dataSourceContext + " | Name: " + dataSourceName);
+                         System.out.println("MBEAN_VALUE: " + server.getAttribute(objectname, "numActive"));*/
+                    }
+                    System.out.println(metricSet.toString());
+                    jmxMetricsQueue.add(metricSet.toString());
+                    counter++;
                     //System.out.println(conn.getAttribute(new ObjectName("Catalina:type=ThreadPool,*"), "sessionTimeout"));
                     //agent mode detected
                 } else {
@@ -222,19 +294,32 @@ public class JMXTransformer implements Runnable {
 
     public static void main(String args[]) throws MalformedURLException, IOException, MBeanException, AttributeNotFoundException, InstanceNotFoundException, ReflectionException, MalformedObjectNameException {
         remoteMode = true;
-        mainClassName = 
         if (args.length > 0) {
             JMX_REMOTE_HOST = args[0];
             JMX_REMOTE_PORT = args[1];
-            if (args.length > 2) {
-                JMX_REMOTE_AUTH = args[2].split(",");
+            appName = args[2];
+            outputMode = args[3];
+            if (args.length > 4) {
+                JMX_REMOTE_AUTH = args[4].split(",");
+            }
+            if(outputMode == "csv")
+            {
+                CSVWriterThread = new Thread(new CSVWriter());
+                CSVWriterThread.setName("CSSAPM-CSVWriterThread");
+                CSVWriterThread.start();
+            }
+            else
+            {
+                GraphiteWriterThread = new Thread(new GraphiteWriter());
+                GraphiteWriterThread.setName("CSSAPM-GraphiteWriterThread");
+                GraphiteWriterThread.start();
             }
             remoteJMXListener = new Thread(new JMXTransformer());
             remoteJMXListener.setName("CSSAPM-JMXListenerThread");
             remoteJMXListener.start();
         } else {
             System.out.println("ERROR: No arguments provided");
-            System.out.println("Usage: java -cp .;./myAgent.jar plugins.JMX.JMXTransformer <REMOTE_IP> <PORT>");
+            System.out.println("Usage: java -cp .;./myAgent.jar plugins.JMX.JMXTransformer <REMOTE_IP> <PORT> <APP_NAME> <csv|graphite> <graphite_host> <graphite_port>");
         }
     }
 }
