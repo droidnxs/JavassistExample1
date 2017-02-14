@@ -31,7 +31,7 @@ public class JMXRemoteUtils {
     
     public static long getCommitted(CompositeData data)
     {
-        return (long)data.get("committed");
+        return (long) data.get("committed");
     }
     
     public static long getInit(CompositeData data)
@@ -52,23 +52,6 @@ public class JMXRemoteUtils {
     public static StringBuilder getLineFormat(StringBuilder srcString, String appname, String metric, long value)
     {            
         return srcString.append(appname).append(metric).append(" ").append(value).append(" ").append(currentTimeMillisWithLinefeed());
-    }
-    
-    public static String getCSVFormat(List<String> values, boolean isHeader)
-    {
-        String line = null;
-        if(!isHeader)
-        {
-            line = currentDateTime() + ",";
-        }
-        for(int i=0; i<values.size(); i++)
-        {
-            line = line + values.get(i);
-            if(i!=values.size() - 1) {
-                line = line + ",";
-            }          
-        }
-        return line;
     }
     
     public static String currentDateTime() {

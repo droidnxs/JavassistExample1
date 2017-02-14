@@ -16,6 +16,7 @@ public class SimpleTransformer implements ClassFileTransformer {
     public static String agentArgs = null;
 
     public static String mainClassName = "javaagent." + System.getProperty("cssagent.appname");
+    public static String graphite_host = System.getProperty("cssagent.host");
 
     public SimpleTransformer() throws ClassNotFoundException {
         super();
@@ -31,7 +32,7 @@ public class SimpleTransformer implements ClassFileTransformer {
         Thread dataPoller = new Thread(new QueuePoller());
         dataPoller.setName("CSSAPM-dataPollerThread");
         dataPoller.start();
-        Thread dataWriter = new Thread(new GraphiteWriter());
+        Thread dataWriter = new Thread(new GraphiteWriter(graphite_host));
         dataWriter.setName("CSSAPM-dataWriterThread");
         dataWriter.start();
     }

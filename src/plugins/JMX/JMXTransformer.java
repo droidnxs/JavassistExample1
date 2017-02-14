@@ -6,7 +6,6 @@
 package plugins.JMX;
 
 import static agent.SimpleTransformer.mainClassName;
-import collector.CSVWriter;
 import collector.GraphiteWriter;
 import static collector.GraphiteWriter.currentTimeMillisWithLinefeed;
 import static collector.GraphiteWriter.removeWhitespacesAndSpecialChars;
@@ -25,7 +24,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -42,10 +40,8 @@ import javax.management.remote.JMXConnector;
 import javax.management.remote.JMXConnectorFactory;
 import javax.management.remote.JMXServiceURL;
 import org.apache.commons.modeler.Registry;
-import static plugins.JMX.JMXRemoteUtils.getCSVFormat;
 import static plugins.JMX.JMXRemoteUtils.getCommitted;
 import static plugins.JMX.JMXRemoteUtils.getInit;
-import static plugins.JMX.JMXRemoteUtils.getLineFormat;
 import static plugins.JMX.JMXRemoteUtils.getMax;
 import static plugins.JMX.JMXRemoteUtils.getUsed;
 
@@ -56,7 +52,6 @@ import static plugins.JMX.JMXRemoteUtils.getUsed;
 public class JMXTransformer implements Runnable {
 
     static Thread remoteJMXListener;
-    static Thread CSVWriterThread;
     static Thread GraphiteWriterThread;
 
     static boolean remoteMode = false;
@@ -75,9 +70,7 @@ public class JMXTransformer implements Runnable {
     public float BYTE_TO_KB_FACTOR = 1 / 1024f;
     public float BYTE_TO_MB_FACTOR = 1 / 1048576f;
 
-
-    public static LinkedBlockingQueue jmxMetricsQueue = null;
-    public static LinkedBlockingQueue csvMetricsQueue = null;
+    public static LinkedBlockingQueue jmxMetricsQueue = new LinkedBlockingQueue();
     static ClassLoadingMXBean classLoadingMXBean = ManagementFactory.getClassLoadingMXBean();
     static List<MemoryPoolMXBean> memoryPoolMXBean = ManagementFactory.getMemoryPoolMXBeans();
     static MemoryMXBean memoryMXBean = ManagementFactory.getMemoryMXBean();
@@ -85,8 +78,8 @@ public class JMXTransformer implements Runnable {
     static RuntimeMXBean runtimeMxBean = ManagementFactory.getRuntimeMXBean();
     static List<GarbageCollectorMXBean> gcMXBean = ManagementFactory.getGarbageCollectorMXBeans();
     private static StringBuilder metricSet = null;
-    List<String[]> metricList = new ArrayList<String[]> ();
-    
+    List<String[]> metricList = new ArrayList<String[]>();
+
     @Override
     public void run() {
         try {
@@ -95,14 +88,6 @@ public class JMXTransformer implements Runnable {
             String metricFooter = null;
             long[][] gcBeans = {{0L, 0L, 0L, 0L}, {0L, 0L, 0L, 0L}};
             int counter = 0;
-            if(outputMode == "csv")
-            {
-                csvMetricsQueue = new LinkedBlockingQueue();
-            }
-            else
-            {
-                jmxMetricsQueue = new LinkedBlockingQueue();
-            }
             while (true) {
                 metricSet = new StringBuilder();
                 metricFooter = currentTimeMillisWithLinefeed();
@@ -120,22 +105,12 @@ public class JMXTransformer implements Runnable {
                             conn = jmxc.getMBeanServerConnection();
                         }
                     }
-                    /*Set dsNames = conn.queryNames(new ObjectName("Catalina:type=DataSource,*"), null);
-                     System.out.println(dsNames.size());
-                     Iterator it = dsNames.iterator();
-                     while(it.hasNext())
-                     {
-                     ObjectName objectname = (ObjectName) it.next();
-                     System.out.println(objectname.toString() + " NUMACTIVE: " + conn.getAttribute(objectname, "numActive"));
-                     }*/
                     Set runtimes = conn.queryNames(new ObjectName(ManagementFactory.RUNTIME_MXBEAN_NAME), null);
                     Set memoryNames = conn.queryNames(new ObjectName(ManagementFactory.MEMORY_MXBEAN_NAME), null);
                     Set memoryPools = conn.queryNames(new ObjectName("java.lang:type=MemoryPool,name=*"), null);
                     Set gcNames = conn.queryNames(new ObjectName("java.lang:type=GarbageCollector,name=*"), null);
                     Set threading = conn.queryNames(new ObjectName("java.lang:type=Threading"), null);
                     Set dataSource = conn.queryNames(new ObjectName("Catalina:type=DataSource,*"), null);
-                    //System.out.println(dsNames.size());
-                    
                     Iterator it = null;
                     if (counter == 0) {
                         it = runtimes.iterator();
@@ -146,22 +121,22 @@ public class JMXTransformer implements Runnable {
                             System.out.println("Output Mode: " + outputMode);
                         }
                     }
-                    
+
                     it = memoryNames.iterator();
                     while (it.hasNext()) {
                         ObjectName objectname = (ObjectName) it.next();
                         CompositeData HeapMemoryUsage = (CompositeData) conn.getAttribute(objectname, "HeapMemoryUsage");
                         CompositeData NonHeapMemoryUsage = (CompositeData) conn.getAttribute(objectname, "NonHeapMemoryUsage");
-                      
+
                         metricSet
-                                .append("javaagent.").append(appName).append(".JMX.Memory.Heap.Usage.Committed ").append(getCommitted(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append("javaagent.").append(appName).append(".JMX.Memory.Heap.Usage.Used ").append(getUsed(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append("javaagent.").append(appName).append(".JMX.Memory.Heap.Usage.Init ").append(getInit(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append("javaagent.").append(appName).append(".JMX.Memory.Heap.Usage.Max ").append(getMax(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append("javaagent.").append(appName).append(".JMX.Memory.Non_heap.Usage.Committed ").append(getCommitted(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append("javaagent.").append(appName).append(".JMX.Memory.Non_heap.Usage.Used ").append(getUsed(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append("javaagent.").append(appName).append(".JMX.Memory.Non_heap.Usage.Init ").append(getInit(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append("javaagent.").append(appName).append(".JMX.Memory.Non_heap.Usage.Max ").append(getMax(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter);                                              
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Heap.Committed ").append(getCommitted(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Heap.Used ").append(getUsed(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Heap.Init ").append(getInit(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Heap.Max ").append(getMax(HeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Non_heap.Committed ").append(getCommitted(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Non_heap.Used ").append(getUsed(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Non_heap.Init ").append(getInit(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.Memory.Non_heap.Max ").append(getMax(NonHeapMemoryUsage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter);
                     }
                     it = memoryPools.iterator();
                     while (it.hasNext()) {
@@ -169,10 +144,10 @@ public class JMXTransformer implements Runnable {
                         CompositeData Usage = (CompositeData) conn.getAttribute(objectname, "Usage");
                         String poolName = objectname.toString().substring(objectname.toString().lastIndexOf("=") + 1);
                         metricSet
-                                .append("javaagent.").append(appName).append(".JMX.MemoryPools." + removeWhitespacesAndSpecialChars(poolName) + ".Usage.Committed ").append(getCommitted(Usage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append("javaagent.").append(appName).append(".JMX.MemoryPools." + removeWhitespacesAndSpecialChars(poolName) + ".Usage.Used ").append(getUsed(Usage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append("javaagent.").append(appName).append(".JMX.MemoryPools." + removeWhitespacesAndSpecialChars(poolName) + ".Usage.Init ").append(getInit(Usage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append("javaagent.").append(appName).append(".JMX.MemoryPools." + removeWhitespacesAndSpecialChars(poolName) + ".Usage.Max ").append(getMax(Usage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter);
+                                .append("javaagent.").append(appName).append(".JMX.MemoryPools." + removeWhitespacesAndSpecialChars(poolName) + ".Committed ").append(getCommitted(Usage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.MemoryPools." + removeWhitespacesAndSpecialChars(poolName) + ".Used ").append(getUsed(Usage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.MemoryPools." + removeWhitespacesAndSpecialChars(poolName) + ".Init ").append(getInit(Usage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append("javaagent.").append(appName).append(".JMX.MemoryPools." + removeWhitespacesAndSpecialChars(poolName) + ".Max ").append(getMax(Usage) * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter);
                     }
                     it = gcNames.iterator();
                     while (it.hasNext()) {
@@ -190,7 +165,6 @@ public class JMXTransformer implements Runnable {
                         int ThreadCount = (int) conn.getAttribute(objectname, "ThreadCount");
                         int DaemonThreadCount = (int) conn.getAttribute(objectname, "DaemonThreadCount");
                         long TotalStartedCount = (long) conn.getAttribute(objectname, "TotalStartedThreadCount");
-                        
                         metricSet
                                 .append("javaagent.").append(appName).append(".JMX.Threads.ThreadCount ").append(ThreadCount).append(" ").append(metricFooter)
                                 .append("javaagent.").append(appName).append(".JMX.Threads.DaemonThreadCount ").append(DaemonThreadCount).append(" ").append(metricFooter)
@@ -199,55 +173,36 @@ public class JMXTransformer implements Runnable {
                     String objName, dataSourceContext, dataSourceName;
                     for (Iterator dit = dataSource.iterator(); dit.hasNext();) {
                         ObjectName objectname = (ObjectName) dit.next();
-                        //if(!objectname.toString().contains("context=/," || !))
                         objName = objectname.toString();
                         dataSourceContext = objName.substring(objName.indexOf("context=/") + 8, objName.indexOf(",host")).replace("/", "_");
                         dataSourceName = objName.substring(objName.indexOf("name=\"") + 6, objName.lastIndexOf("\""));
                         metricSet.append("javaagent.").append(appName).append(".JMX.DataSource." + dataSourceContext + "." + dataSourceName + ".numActive ").append(conn.getAttribute(objectname, "numActive")).append(" ").append(metricFooter)
                                 .append("javaagent.").append(appName).append(".JMX.DataSource." + dataSourceContext + "." + dataSourceName + ".numIdle ").append(conn.getAttribute(objectname, "numIdle")).append(" ").append(metricFooter);
-                        /*System.out.println("Context: " + dataSourceContext + " | Name: " + dataSourceName);
-                         System.out.println("MBEAN_VALUE: " + server.getAttribute(objectname, "numActive"));*/
                     }
-                    System.out.println(metricSet.toString());
                     jmxMetricsQueue.add(metricSet.toString());
                     counter++;
-                    //System.out.println(conn.getAttribute(new ObjectName("Catalina:type=ThreadPool,*"), "sessionTimeout"));
-                    //agent mode detected
-                } else {
+                } else { //AGENT MODE DETECTED
                     MBeanServer server = new Registry().getMBeanServer();
                     Set dsNames = server.queryNames(new ObjectName("Catalina:type=DataSource,*"), null);
                     String objName, dataSourceContext, dataSourceName;
                     for (Iterator it = dsNames.iterator(); it.hasNext();) {
                         ObjectName objectname = (ObjectName) it.next();
-                        //if(!objectname.toString().contains("context=/," || !))
                         objName = objectname.toString();
                         dataSourceContext = objName.substring(objName.indexOf("context=/") + 8, objName.indexOf(",host")).replace("/", "_");
                         dataSourceName = objName.substring(objName.indexOf("name=\"") + 6, objName.lastIndexOf("\""));
-                        StringBuilder append = metricSet.append(mainClassName).append(".JMX.DataSource." + dataSourceContext + "." + dataSourceName + ".numActive ").append(server.getAttribute(objectname, "numActive")).append(" ").append(metricFooter)
+                        metricSet.append(mainClassName).append(".JMX.DataSource." + dataSourceContext + "." + dataSourceName + ".numActive ").append(server.getAttribute(objectname, "numActive")).append(" ").append(metricFooter)
                                 .append(mainClassName).append(".JMX.DataSource." + dataSourceContext + "." + dataSourceName + ".numIdle ").append(server.getAttribute(objectname, "numIdle")).append(" ").append(metricFooter);
-                        /*System.out.println("Context: " + dataSourceContext + " | Name: " + dataSourceName);
-                         System.out.println("MBEAN_VALUE: " + server.getAttribute(objectname, "numActive"));*/
                     }
-                    /*Set dsNames = server.queryNames(new ObjectName("java.lang:type=MemoryPool,*"), null);
-                     for (Iterator it = dsNames.iterator(); it.hasNext();) {
-                     ObjectName objectname = (ObjectName) it.next();
-                     System.out.println(objectname.toString());
-                     System.out.println(server.getAttribute(objectname, "Usage") instanceof CompositeData);
-                     CompositeData usage = (CompositeData) server.getAttribute(objectname, "Usage");
-                     long init = (long) usage.get("init");
-                     System.out.println(init);
-                     }*/
                     metricSet
-                            .append(mainClassName).append(".JMX.Memory.Heap.Usage.Committed ").append(memoryMXBean.getHeapMemoryUsage().getCommitted() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                            .append(mainClassName).append(".JMX.Memory.Heap.Usage.Used ").append(memoryMXBean.getHeapMemoryUsage().getUsed() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                            .append(mainClassName).append(".JMX.Memory.Heap.Usage.Init ").append(memoryMXBean.getHeapMemoryUsage().getInit() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                            .append(mainClassName).append(".JMX.Memory.Heap.Usage.Max ").append(memoryMXBean.getHeapMemoryUsage().getMax() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                            .append(mainClassName).append(".JMX.Memory.Non_heap.Usage.Committed ").append(memoryMXBean.getNonHeapMemoryUsage().getCommitted() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                            .append(mainClassName).append(".JMX.Memory.Non_heap.Usage.Used ").append(memoryMXBean.getNonHeapMemoryUsage().getUsed() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                            .append(mainClassName).append(".JMX.Memory.Non_heap.Usage.Init ").append(memoryMXBean.getNonHeapMemoryUsage().getInit() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                            .append(mainClassName).append(".JMX.Memory.Non_heap.Usage.Max ").append(memoryMXBean.getNonHeapMemoryUsage().getMax() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter);
+                            .append(mainClassName).append(".JMX.Memory.Heap.Committed ").append(memoryMXBean.getHeapMemoryUsage().getCommitted() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                            .append(mainClassName).append(".JMX.Memory.Heap.Used ").append(memoryMXBean.getHeapMemoryUsage().getUsed() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                            .append(mainClassName).append(".JMX.Memory.Heap.Init ").append(memoryMXBean.getHeapMemoryUsage().getInit() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                            .append(mainClassName).append(".JMX.Memory.Heap.Max ").append(memoryMXBean.getHeapMemoryUsage().getMax() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                            .append(mainClassName).append(".JMX.Memory.Non_heap.Committed ").append(memoryMXBean.getNonHeapMemoryUsage().getCommitted() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                            .append(mainClassName).append(".JMX.Memory.Non_heap.Used ").append(memoryMXBean.getNonHeapMemoryUsage().getUsed() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                            .append(mainClassName).append(".JMX.Memory.Non_heap.Init ").append(memoryMXBean.getNonHeapMemoryUsage().getInit() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                            .append(mainClassName).append(".JMX.Memory.Non_heap.Max ").append(memoryMXBean.getNonHeapMemoryUsage().getMax() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter);
 
-                    //jmxMetricsQueue.add(metricSet.toString());
                     for (MemoryPoolMXBean m : memoryPoolMXBean) {
                         metricSet
                                 .append(mainClassName).append(".JMX.MemoryPools.").append(removeWhitespacesAndSpecialChars(m.getType().toString())).append(".").append(removeWhitespacesAndSpecialChars(m.getName())).append(".Committed").append(" ").append(m.getUsage().getCommitted() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
@@ -256,12 +211,9 @@ public class JMXTransformer implements Runnable {
                                 .append(mainClassName).append(".JMX.MemoryPools.").append(removeWhitespacesAndSpecialChars(m.getType().toString())).append(".").append(removeWhitespacesAndSpecialChars(m.getName())).append(".Max").append(" ").append(m.getUsage().getMax() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter);
 
                     }
-                    //for (GarbageCollectorMXBean g : gcMXBean) {
                     for (int i = 0; i < gcMXBean.size(); i++) {
                         gcBeans[i][0] = gcMXBean.get(i).getCollectionCount();
                         gcBeans[i][2] = gcMXBean.get(i).getCollectionTime();
-                        /*System.out.println("Count: " + (gcBeans[i][0] - gcBeans[i][1]));
-                         System.out.println("Time: " + (gcBeans[i][2] - gcBeans[i][3]));*/
                         if (counter > 0) {
                             metricSet
                                     .append(mainClassName).append(".JMX.GC.").append(removeWhitespacesAndSpecialChars(gcMXBean.get(i).getName())).append(".CollectionCount ").append(gcBeans[i][0] - gcBeans[i][1]).append(" ").append(metricFooter)
@@ -269,17 +221,11 @@ public class JMXTransformer implements Runnable {
                         }
                         gcBeans[i][1] = gcBeans[i][0];
                         gcBeans[i][3] = gcBeans[i][2];
-
-                        /* metricSet
-                         .append(mainClassName).append(".JMX.GC.").append(removeWhitespacesAndSpecialChars(g.getName())).append(".CollectionCount ").append(g.getCollectionCount()).append(" ").append(metricFooter)
-                         .append(mainClassName).append(".JMX.GC.").append(removeWhitespacesAndSpecialChars(g.getName())).append(".CollectionTime ").append(g.getCollectionTime()).append(" ").append(metricFooter);*/
                     }
                     metricSet
                             .append(mainClassName).append(".JMX.Threads.ThreadCount ").append(threadMXBean.getThreadCount()).append(" ").append(metricFooter)
                             .append(mainClassName).append(".JMX.Threads.DaemonThreadCount ").append(threadMXBean.getDaemonThreadCount()).append(" ").append(metricFooter)
-                            .append(mainClassName).append(".JMX.Threads.TotalStartedCount ").append(threadMXBean.getTotalStartedThreadCount()).append(" ").append(metricFooter);
-
-                    //System.out.println(metricSet.toString());
+                            .append(mainClassName).append(".JMX.Threads.TotalStartedThreadCount ").append(threadMXBean.getTotalStartedThreadCount()).append(" ").append(metricFooter);
                     jmxMetricsQueue.add(metricSet.toString());
                 }
                 counter++;
@@ -294,32 +240,24 @@ public class JMXTransformer implements Runnable {
 
     public static void main(String args[]) throws MalformedURLException, IOException, MBeanException, AttributeNotFoundException, InstanceNotFoundException, ReflectionException, MalformedObjectNameException {
         remoteMode = true;
+        String graphite_host = null;
         if (args.length > 0) {
             JMX_REMOTE_HOST = args[0];
             JMX_REMOTE_PORT = args[1];
             appName = args[2];
-            outputMode = args[3];
+            graphite_host = args[3];
             if (args.length > 4) {
                 JMX_REMOTE_AUTH = args[4].split(",");
             }
-            if(outputMode == "csv")
-            {
-                CSVWriterThread = new Thread(new CSVWriter());
-                CSVWriterThread.setName("CSSAPM-CSVWriterThread");
-                CSVWriterThread.start();
-            }
-            else
-            {
-                GraphiteWriterThread = new Thread(new GraphiteWriter());
-                GraphiteWriterThread.setName("CSSAPM-GraphiteWriterThread");
-                GraphiteWriterThread.start();
-            }
+            GraphiteWriterThread = new Thread(new GraphiteWriter(graphite_host));
+            GraphiteWriterThread.setName("CSSAPM-GraphiteWriterThread");
+            GraphiteWriterThread.start();
             remoteJMXListener = new Thread(new JMXTransformer());
             remoteJMXListener.setName("CSSAPM-JMXListenerThread");
             remoteJMXListener.start();
         } else {
             System.out.println("ERROR: No arguments provided");
-            System.out.println("Usage: java -cp .;./myAgent.jar plugins.JMX.JMXTransformer <REMOTE_IP> <PORT> <APP_NAME> <csv|graphite> <graphite_host> <graphite_port>");
+            System.out.println("Usage: java -cp .;./myAgent.jar plugins.JMX.JMXTransformer <REMOTE_IP> <PORT> <APP_NAME> <graphite_host> <UNAME,PWD>");
         }
     }
 }

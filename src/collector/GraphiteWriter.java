@@ -18,13 +18,18 @@ import plugins.JMX.JMXTransformer;
  * @author css102082
  */
 public class GraphiteWriter implements Runnable {
-
+    String graphite_host = "10.8.157.30";
     static Socket s = null;
     static Writer writer = null;
 
+    public GraphiteWriter(String graphite_host)
+    {
+        this.graphite_host = graphite_host;
+    }
+    
     public void run() {
         try {
-            s = new Socket("10.8.157.30", 2003);
+            s = new Socket(this.graphite_host, 2003);
             Writer writer = new OutputStreamWriter(s.getOutputStream());
             String line = null;
             while ((line = (JMXTransformer.jmxMetricsQueue.take() + "\n")) != null) {
