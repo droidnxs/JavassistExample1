@@ -20,7 +20,7 @@ public class QueuePoller implements Runnable {
                 } catch (InterruptedException ex) {
                 Logger.getLogger(QueuePoller.class.getName()).log(Level.SEVERE, null, ex);
                 }*/
-                System.out.println(MySQLTransformer.methodTraceQueue.take());
+                System.out.println("QueuePoller: " + agent.SimpleTransformer.methodTraceQueue.take());
             } catch (InterruptedException ex) {
                 Logger.getLogger(QueuePoller.class.getName()).log(Level.SEVERE, null, ex);
             }

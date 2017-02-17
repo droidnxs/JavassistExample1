@@ -14,7 +14,7 @@ import javafx.util.Pair;
 
 public class MethodStack {
 
-    private static Stack<String> stack = new Stack<String>();
+    /*private static Stack<String> stack = new Stack<String>();
     private static Map<Pair<String, String>, Integer> callgraph = new HashMap<Pair<String,String>, Integer>();
     static FileWriter fw; 
     static StringBuffer sb;
@@ -91,5 +91,5 @@ public class MethodStack {
         sb.append(returnFrom).append("=").append(System.nanoTime()).append("\n");
         //fw.write(sb.toString());
         System.out.println("POP: " + sb.toString());
-    }
+    }*/
 }

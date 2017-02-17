@@ -15,16 +15,20 @@ import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 import java.lang.management.MemoryPoolMXBean;
+import java.lang.management.OperatingSystemMXBean;
 import java.lang.management.RuntimeMXBean;
 import java.lang.management.ThreadMXBean;
 import java.net.MalformedURLException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Hashtable;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.management.AttributeNotFoundException;
@@ -44,6 +48,9 @@ import static plugins.JMX.JMXRemoteUtils.getCommitted;
 import static plugins.JMX.JMXRemoteUtils.getInit;
 import static plugins.JMX.JMXRemoteUtils.getMax;
 import static plugins.JMX.JMXRemoteUtils.getUsed;
+import sun.management.counter.Counter;
+import sun.management.counter.perf.PerfInstrumentation;
+import sun.misc.Perf;
 
 /**
  *
@@ -77,14 +84,15 @@ public class JMXTransformer implements Runnable {
     static ThreadMXBean threadMXBean = ManagementFactory.getThreadMXBean();
     static RuntimeMXBean runtimeMxBean = ManagementFactory.getRuntimeMXBean();
     static List<GarbageCollectorMXBean> gcMXBean = ManagementFactory.getGarbageCollectorMXBeans();
+    static OperatingSystemMXBean osMXBean = ManagementFactory.getOperatingSystemMXBean();
     private static StringBuilder metricSet = null;
-    List<String[]> metricList = new ArrayList<String[]>();
+    static int PID;
 
     @Override
     public void run() {
         try {
             Thread.sleep(JMX_LISTENER_START_DELAY_MS);
-            url = new JMXServiceURL("service:jmx:rmi:///jndi/rmi://10.8.157.42:7003/jmxrmi");
+            url = new JMXServiceURL("service:jmx:rmi:///jndi/rmi://" + JMX_REMOTE_HOST + ":" + JMX_REMOTE_PORT + "/jmxrmi");
             String metricFooter = null;
             long[][] gcBeans = {{0L, 0L, 0L, 0L}, {0L, 0L, 0L, 0L}};
             int counter = 0;
@@ -119,9 +127,17 @@ public class JMXTransformer implements Runnable {
                             System.out.println("Remote monitoring of " + conn.getAttribute(objectname, "Name") + " started");
                             System.out.println("Classpath: " + conn.getAttribute(objectname, "ClassPath"));
                             System.out.println("Output Mode: " + outputMode);
+                            PID = Integer.parseInt(conn.getAttribute(objectname, "Name").toString().split("@")[0]);                            
+                            ByteBuffer bb = Perf.getPerf().attach(0, "r");
+                            PerfInstrumentation instr = new PerfInstrumentation(bb);
+                            long hz = ((sun.management.counter.LongCounter) instr.findByPattern("sun.os.hrt.frequency").get(0)).longValue();
+                            double tick = ((double) TimeUnit.SECONDS.toNanos(1)) / hz;
+                            List <Counter> counters = instr.getAllCounters();
+                            for (Counter c : counters) {
+                                System.out.println(c.getName() + " " + c.getValue().toString());
+                            }
                         }
                     }
-
                     it = memoryNames.iterator();
                     while (it.hasNext()) {
                         ObjectName objectname = (ObjectName) it.next();
@@ -152,6 +168,8 @@ public class JMXTransformer implements Runnable {
                     it = gcNames.iterator();
                     while (it.hasNext()) {
                         ObjectName objectname = (ObjectName) it.next();
+                        /*GarbageCollectorMXBean gc = ManagementFactory.newPlatformMXBeanProxy(conn, objectname.getCanonicalName(), GarbageCollectorMXBean.class);
+                         System.out.println(gc.getName() + " " + gc.getCollectionCount() + " " + gc.getCollectionTime());*/
                         long CollectionCount = (long) conn.getAttribute(objectname, "CollectionCount");
                         long CollectionTime = (long) conn.getAttribute(objectname, "CollectionTime");
                         String gcName = objectname.toString().substring(objectname.toString().lastIndexOf("=") + 1);
@@ -204,12 +222,16 @@ public class JMXTransformer implements Runnable {
                             .append(mainClassName).append(".JMX.Memory.Non_heap.Max ").append(memoryMXBean.getNonHeapMemoryUsage().getMax() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter);
 
                     for (MemoryPoolMXBean m : memoryPoolMXBean) {
+                        /*metricSet
+                         .append(mainClassName).append(".JMX.MemoryPools.").append(removeWhitespacesAndSpecialChars(m.getType().toString())).append(".").append(removeWhitespacesAndSpecialChars(m.getName())).append(".Committed").append(" ").append(m.getUsage().getCommitted() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                         .append(mainClassName).append(".JMX.MemoryPools.").append(removeWhitespacesAndSpecialChars(m.getType().toString())).append(".").append(removeWhitespacesAndSpecialChars(m.getName())).append(".Used").append(" ").append(m.getUsage().getUsed() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                         .append(mainClassName).append(".JMX.MemoryPools.").append(removeWhitespacesAndSpecialChars(m.getType().toString())).append(".").append(removeWhitespacesAndSpecialChars(m.getName())).append(".Init").append(" ").append(m.getUsage().getInit() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                         .append(mainClassName).append(".JMX.MemoryPools.").append(removeWhitespacesAndSpecialChars(m.getType().toString())).append(".").append(removeWhitespacesAndSpecialChars(m.getName())).append(".Max").append(" ").append(m.getUsage().getMax() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter);*/
                         metricSet
-                                .append(mainClassName).append(".JMX.MemoryPools.").append(removeWhitespacesAndSpecialChars(m.getType().toString())).append(".").append(removeWhitespacesAndSpecialChars(m.getName())).append(".Committed").append(" ").append(m.getUsage().getCommitted() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append(mainClassName).append(".JMX.MemoryPools.").append(removeWhitespacesAndSpecialChars(m.getType().toString())).append(".").append(removeWhitespacesAndSpecialChars(m.getName())).append(".Used").append(" ").append(m.getUsage().getUsed() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append(mainClassName).append(".JMX.MemoryPools.").append(removeWhitespacesAndSpecialChars(m.getType().toString())).append(".").append(removeWhitespacesAndSpecialChars(m.getName())).append(".Init").append(" ").append(m.getUsage().getInit() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
-                                .append(mainClassName).append(".JMX.MemoryPools.").append(removeWhitespacesAndSpecialChars(m.getType().toString())).append(".").append(removeWhitespacesAndSpecialChars(m.getName())).append(".Max").append(" ").append(m.getUsage().getMax() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter);
-
+                                .append(mainClassName).append(".JMX.MemoryPools.").append(".").append(removeWhitespacesAndSpecialChars(m.getName())).append(".Committed").append(" ").append(m.getUsage().getCommitted() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append(mainClassName).append(".JMX.MemoryPools.").append(".").append(removeWhitespacesAndSpecialChars(m.getName())).append(".Used").append(" ").append(m.getUsage().getUsed() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append(mainClassName).append(".JMX.MemoryPools.").append(".").append(removeWhitespacesAndSpecialChars(m.getName())).append(".Init").append(" ").append(m.getUsage().getInit() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter)
+                                .append(mainClassName).append(".JMX.MemoryPools.").append(".").append(removeWhitespacesAndSpecialChars(m.getName())).append(".Max").append(" ").append(m.getUsage().getMax() * BYTE_TO_KB_FACTOR).append(" ").append(metricFooter);
                     }
                     for (int i = 0; i < gcMXBean.size(); i++) {
                         gcBeans[i][0] = gcMXBean.get(i).getCollectionCount();
